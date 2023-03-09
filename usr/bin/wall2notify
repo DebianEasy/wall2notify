@@ -120,7 +120,7 @@ function tty_new(){
     done
     getty tty"$Tty_Tmp" -a $1 &
     sleep 1
-    setsid sh -c "clear" <> tty"$Tty_Tmp" >&0 2>&1
+    #setsid sh -c "clear" <> tty"$Tty_Tmp" >&0 2>&1
     echo "$Tty_Tmp"
     unset Tty_Tmp
 }
