@@ -1,0 +1,9 @@
+[Unit]
+Description=NODE wall-to-notify-send service
+
+[Service]
+Type=simple
+ExecStart=bash -ic "wall2notify"
+
+[Install]
+WantedBy=multi-user.target
