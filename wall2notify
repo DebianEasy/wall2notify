@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+Version=0.6.1
+DEBUG_MODE=${DEBUG_MODE:-0}
+
+Tty_Num_Low=13
+Tty_Num=$Tty_Num_Low
+Empty_Od=`cat <<EOF
+0000000 000012
+0000001
+EOF`
+Unknown_Od1=`cat <<EOF
+0000000 005376
+0000002
+EOF`
+Unknown_Od2=`cat <<EOF
+0000000 005377
+0000002
+EOF`
+declare -A Tty_List
+declare -A Line_Count
+PathRun=/run/wall2notify
+export LANG=en_US.utf8
+export LC_ALL=en_US.utf8
+#Flag1="("`date +%a`
+#Flag2=`date +%Y`"):"
+#Flag3=`date +%Y`")"
+
+function daemon_term(){
+	jobs -l
+	for pidline in `jobs -p`
+	do
+		kill $pidline
+	done
+	unset pidline
+	[ -e $PathRun ] && rm -rf $PathRun
+	exit 1
+}
+
+function user_add(){
+	(echo $1 |grep -v ' ' >/dev/null) &&
+	{
+    Flag_Tmp=0
+    if [[ $limit_users == "yes" && -e /etc/wall2notify/users ]]
+    then
+        if (cat /etc/wall2notify/users|grep -w $1 > /dev/null)
+        then
+            Flag_Tmp=1
+        fi
+    else
+    Flag_Tmp=1
+    fi
+    [ $Flag_Tmp -eq 1 ] && {
+    if [[ -z ${Tty_List[$1]} ]]
+            then
+                if [[ $new_tty == "yes" ]]
+                then
+                    Tty_Tmp=$(tty_new $1)
+                else
+                    Tty_Tmp=$(tty_get $1)
+            fi
+            Tty_List[$1]=$Tty_Tmp
+    fi
+    }
+    }
+}
+
+function listen_vcsu(){
+if [ -e /dev/vcsu"$2" ]
+then
+    Line_Text=()
+    Count_Tmp=`cat /dev/vcsu"$2" |iconv -f UTF-32LE|tr -d '\0'|sed 's/                 /\n/g'|awk '/./ {print}'|wc -l`
+    Line_Count_Old=${Line_Count[$1]:-$Count_Tmp}
+    Line_Count[$1]=$Count_Tmp
+    Count_Head=$((${Line_Count[$1]}-$Line_Count_Old))
+    [ $Count_Head -lt 2 ] && Count_Head=2
+    Count_Tail=$(($Count_Head+1))
+    if [ ${Line_Count[$1]} -ne $Line_Count_Old ]
+    then
+        IFS=$'\n' Line_Text=($(cat /dev/vcsu"$2" |iconv -f UTF-32LE|tr -d '\0'|sed 's/                        /\n/g'|awk '/./ {print}'|tail -n $Count_Tail|head -n $Count_Head))
+        Uid=`id -u $1`
+        Count_Tmp_2=0
+        #[[ -z ${Line_Title} || ${Line_Title} == '←[H←[2J←[3J' ]] || {
+        while [ $Count_Tmp_2 -lt $((${#Line_Text[@]}-1)) ]
+        do
+            [[ -z ${Line_Text[$Count_Tmp_2]} || ${Line_Text[$Count_Tmp_2]} == '←[H←[2J←[3J' ]] || timeout --kill-after=1 5 sudo -u $1 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$Uid/bus notify-send "${Line_Text[$Count_Tmp_2]}" "${Line_Text[$(($Count_Tmp_2+1))]}" &
+            Count_Tmp_2=$(($Count_Tmp_2+2))
+        done
+    fi
+fi
+}
+
+function sovle_vcsu(){
+    for User_Tmp in ${!Tty_List[@]}
+    do
+        #sleep 0.1
+        listen_vcsu $User_Tmp ${Tty_List[$User_Tmp]}
+    done
+}
+
+function user_check(){
+    for User_Tmp in `users`
+    do
+        user_add $User_Tmp
+    done
+}
+
+function tty_get(){
+    Tty_Tmp=`who | grep -w $1 |grep tty|awk -F ' ' '{print $2}'|head -n 1`
+    echo ${Tty_Tmp#*tty}
+    unset Tty_Tmp
+}
+
+function tty_new(){
+    Flag_Tmp=0
+    Tty_Tmp=$Tty_Num_Low
+    while [ $Flag_Tmp -eq 0 ]
+    do
+        if ( who | grep -w tty"$Tty_Tmp" > /dev/null )
+        then
+            Tty_Tmp=$(($Tty_Tmp+1))
+        else
+            Flag_Tmp=1
+        fi
+    done
+    getty tty"$Tty_Tmp" -a $1 &
+    sleep 1
+    #setsid sh -c "clear" <> tty"$Tty_Tmp" >&0 2>&1
+    echo "$Tty_Tmp"
+    unset Tty_Tmp
+}
+
+function check_root(){
+	[ `whoami` == "root" ] || {
+		echo "Error:   Need to run as root"
+		exit 1
+	}
+}
+
+function echohelp(){
+cat << EOF
+NODE's wall-to-notify-send program, allowing user to get wall messages in GUI desktop environment
+ Version: $Version
+
+Usage: $0 [Arguments]
+ Need root privilege
+
+Arguments:
+ --new-tty              'yes' to use new tty for every logined user, 'no' to use current tty, which may disturb tty users
+ --always-check-users   'yes' to check users and send wall messages for them all the time, 'no' to only send messages to users logined at the time wall2notify runs
+ --limit-users          'yes' to only allow users in /etc/wall2notify/users to use wall2notify, which can help to reduce disturbance
+ --refresh-time          seconds to wait between every time wall2notify check wall messages
+
+Default value of arguments are set in /etc/wall2notify/conf:
+ new_tty                default value of --new-tty
+ always_check_users     default value of --always-check-users
+ limit_users            default value of --limit-users
+ refresh_time           default value of --refresh-time
+
+EOF
+exit 1
+}
+
+
+trap "daemon_term" SIGINT SIGTERM
+[ -e $PathRun ] && rm -rf $PathRun
+check_root
+[ -e /etc/wall2notify/conf ] && source /etc/wall2notify/conf
+for para in $@
+do
+    (echo $para | grep -w -e '--new-tty'>/dev/null) && new_tty=`echo $para | grep -w -e '--new-tty' | awk -F '=' '{print $2}'`
+    (echo $para | grep -w -e '--always-check-users'>/dev/null) && always_check_users=`echo $para | grep -w -e '--always-check-users' | awk -F '=' '{print $2}'`
+    (echo $para | grep -w -e '--limit-users'>/dev/null) && limit_users=`echo $para | grep -w -e '--limit-users' | awk -F '=' '{print $2}'`
+    (echo $para | grep -w -e '--refresh-time'>/dev/null) && refresh_time=`echo $para | grep -w -e '--refresh-time' | awk -F '=' '{print $2}'`
+    (echo $para | grep -w -e '--fresh-time'>/dev/null) && fresh_time=`echo $para | grep -w -e '--fresh-time' | awk -F '=' '{print $2}'`
+    (echo $para | grep -w 'help' >/dev/null) && echohelp
+    (echo $para | grep -w -e '-h' >/dev/null) && echohelp
+done
+refresh_time=${fresh_time:-"$refresh_time"}
+new_tty=${new_tty:-"yes"}
+always_check_users=${always_check_users:-"yes"}
+limit_users=${limit_users:-"no"}
+refresh_time=${refresh_time:-2}
+user_check
+while true
+do
+    sovle_vcsu
+    sleep $refresh_time
+    [[ $always_check_users == "yes" ]] && user_check
+done
