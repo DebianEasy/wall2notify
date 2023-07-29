@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-Version=0.6.1
+Version=0.7.1
 DEBUG_MODE=${DEBUG_MODE:-0}
 
 Tty_Num_Low=13
@@ -17,7 +17,8 @@ Unknown_Od2=`cat <<EOF
 0000002
 EOF`
 declare -A Tty_List
-declare -A Line_Count
+declare -A Line_Text_Old
+declare -A Line_Title_Old
 PathRun=/run/wall2notify
 export LANG=en_US.utf8
 export LC_ALL=en_US.utf8
@@ -67,25 +68,17 @@ function user_add(){
 function listen_vcsu(){
 if [ -e /dev/vcsu"$2" ]
 then
-    Line_Text=()
-    Count_Tmp=`cat /dev/vcsu"$2" |iconv -f UTF-32LE|tr -d '\0'|sed 's/                 /\n/g'|awk '/./ {print}'|wc -l`
-    Line_Count_Old=${Line_Count[$1]:-$Count_Tmp}
-    Line_Count[$1]=$Count_Tmp
-    Count_Head=$((${Line_Count[$1]}-$Line_Count_Old))
-    [ $Count_Head -lt 2 ] && Count_Head=2
-    Count_Tail=$(($Count_Head+1))
-    if [ ${Line_Count[$1]} -ne $Line_Count_Old ]
-    then
-        IFS=$'\n' Line_Text=($(cat /dev/vcsu"$2" |iconv -f UTF-32LE|tr -d '\0'|sed 's/                        /\n/g'|awk '/./ {print}'|tail -n $Count_Tail|head -n $Count_Head))
-        Uid=`id -u $1`
-        Count_Tmp_2=0
-        #[[ -z ${Line_Title} || ${Line_Title} == '←[H←[2J←[3J' ]] || {
-        while [ $Count_Tmp_2 -lt $((${#Line_Text[@]}-1)) ]
-        do
-            [[ -z ${Line_Text[$Count_Tmp_2]} || ${Line_Text[$Count_Tmp_2]} == '←[H←[2J←[3J' ]] || timeout --kill-after=1 5 sudo -u $1 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$Uid/bus notify-send "${Line_Text[$Count_Tmp_2]}" "${Line_Text[$(($Count_Tmp_2+1))]}" &
-            Count_Tmp_2=$(($Count_Tmp_2+2))
-        done
-    fi
+    Diff_Flag=0
+    #Skip_Flag=0
+    Line_Text=`cat /dev/vcsu"$2" |iconv -f UTF-32LE|tr -d '\0'|sed 's/                 /\n/g'|awk '/./ {print}'|tail -2|head -1| awk '{gsub(/^[ \t]+/,""); print $0}'`
+    Line_Title=`cat /dev/vcsu"$2" |iconv -f UTF-32LE|tr -d '\0'|sed 's/                 /\n/g'|awk '/./ {print}'|tail -3|head -1| awk '{gsub(/^[ \t]+/,""); print $0}'`
+    [[ $Line_Text == ${Line_Text_Old[$2]} ]] || Diff_Flag=1
+    [[ $Line_Title == ${Line_Title_Old[$2]} ]] || Diff_Flag=1
+    #[[ ${Line_Text_Old[$2]} == '' ]] && Diff_Flag=0
+    Line_Text_Old[$2]=$Line_Text
+    Line_Title_Old[$2]=$Line_Title
+    Uid=`id -u $1`
+    [ $Diff_Flag -eq 1 ] && timeout --kill-after=1 5 sudo -u $1 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$Uid/bus notify-send "$Line_Title" "$Line_Text" &
 fi
 }
 
@@ -176,7 +169,7 @@ do
     (echo $para | grep -w -e '-h' >/dev/null) && echohelp
 done
 refresh_time=${fresh_time:-"$refresh_time"}
-new_tty=${new_tty:-"yes"}
+new_tty=${new_tty:-"no"}
 always_check_users=${always_check_users:-"yes"}
 limit_users=${limit_users:-"no"}
 refresh_time=${refresh_time:-2}
